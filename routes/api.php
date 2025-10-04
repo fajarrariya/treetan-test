@@ -15,7 +15,5 @@ Route::middleware('auth:sanctum')->group(function () {
         return $request->user();
     });
     Route::post('/logout', [AuthController::class, 'logout']);
-    
-    // Product routes - sekarang fully protected by middleware
     Route::resource('products', ProductController::class);
 });
