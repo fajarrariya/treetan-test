@@ -13,10 +13,11 @@ class Product extends Model
      * The attributes that are mass assignable.
      */
     protected $fillable = [
+        'image',        // tambahin di sini
         'name',
         'description',
         'price',
-        'stock'
+        'stock',
     ];
 
     /**
