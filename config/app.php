@@ -123,4 +123,16 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | ✅ API Security Configuration
+    |--------------------------------------------------------------------------
+    |
+    | These keys are used for API authentication and security.
+    | Set these values in your .env file for proper security.
+    |
+    */
+
+    'access_key' => env('ACCESS_KEY'),
+
 ];
