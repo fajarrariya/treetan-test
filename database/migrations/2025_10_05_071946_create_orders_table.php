@@ -15,7 +15,6 @@ return new class extends Migration
             $table->id();
             $table->foreignId('user_id')->constrained()->onDelete('cascade'); // Relasi ke users table
             $table->enum('status', ['pending', 'completed'])->default('pending'); // Status dengan default pending
-            $table->decimal('total_price', 10, 2); // Total harga dengan 2 decimal
             $table->timestamps();
         });
     }

@@ -11,35 +11,52 @@ use Illuminate\Support\Facades\Validator;
 class OrderController extends Controller
 {
     /**
-     * Display a listing of orders for authenticated user
+     * Display all orders milik user yang sedang login
      */
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
         $user = auth('sanctum')->user();
         
-        // Ambil orders milik user yang sedang login dengan data user
-        $orders = Order::with('user:id,name,email')
+        $query = Order::with(['orderItems.product:id,name,price,image'])
             ->where('user_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->get();
+            ->orderBy('created_at', 'desc');
+
+        // Filter by status jika ada
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
+        }
+
+        $orders = $query->get();
+
+        // Transform data untuk response
+        $ordersData = $orders->map(function ($order) {
+            return [
+                'id' => $order->id,
+                'status' => $order->status,
+                'total_price' => $order->total_price,
+                'total_quantity' => $order->total_quantity,
+                'total_items' => $order->total_items,
+                'created_at' => $order->created_at,
+                'updated_at' => $order->updated_at,
+            ];
+        });
 
         return response()->json([
             'success' => true,
-            'data' => $orders,
+            'data' => $ordersData,
             'message' => 'Orders retrieved successfully'
         ]);
     }
 
     /**
-     * Store a newly created order
+     * Create order baru (basic - biasanya pakai checkout)
      */
     public function store(Request $request): JsonResponse
     {
         $user = auth('sanctum')->user();
 
         $validator = Validator::make($request->all(), [
-            'total_price' => 'required|numeric|min:0',
-            'status' => 'sometimes|in:pending,completed', // optional, default pending
+            'status' => 'sometimes|in:pending,completed',
         ]);
 
         if ($validator->fails()) {
@@ -51,13 +68,9 @@ class OrderController extends Controller
         }
 
         $order = Order::create([
-            'user_id' => $user->id, // Otomatis ambil dari user yang login
-            'total_price' => $request->total_price,
-            'status' => $request->status ?? 'pending', // Default pending jika tidak diisi
+            'user_id' => $user->id,
+            'status' => $request->status ?? 'pending',
         ]);
-
-        // Load relasi user untuk response
-        $order->load('user:id,name,email');
 
         return response()->json([
             'success' => true,
@@ -67,33 +80,55 @@ class OrderController extends Controller
     }
 
     /**
-     * Display the specified order
+     * Display detail order spesifik
      */
     public function show(string $id): JsonResponse
     {
         $user = auth('sanctum')->user();
 
-        // Cari order milik user yang sedang login
-        $order = Order::with('user:id,name,email')
+        $order = Order::with([
+                'orderItems.product:id,name,price,image',
+                'user:id,name,email'
+            ])
             ->where('user_id', $user->id)
             ->find($id);
 
         if (!$order) {
             return response()->json([
                 'success' => false,
-                'message' => 'Order not found or not authorized'
+                'message' => 'Order not found'
             ], 404);
         }
 
+        $orderData = [
+            'id' => $order->id,
+            'status' => $order->status,
+            'user' => $order->user,
+            'total_price' => $order->total_price,
+            'total_quantity' => $order->total_quantity,
+            'total_items' => $order->total_items,
+            'items' => $order->orderItems->map(function ($item) {
+                return [
+                    'id' => $item->id,
+                    'product' => $item->product,
+                    'quantity' => $item->quantity,
+                    'unit_price' => $item->unit_price,
+                    'subtotal' => $item->subtotal,
+                ];
+            }),
+            'created_at' => $order->created_at,
+            'updated_at' => $order->updated_at,
+        ];
+
         return response()->json([
             'success' => true,
-            'data' => $order,
-            'message' => 'Order retrieved successfully'
+            'data' => $orderData,
+            'message' => 'Order detail retrieved successfully'
         ]);
     }
 
     /**
-     * Update the specified order
+     * Update order (hanya status)
      */
     public function update(Request $request, string $id): JsonResponse
     {
@@ -104,13 +139,12 @@ class OrderController extends Controller
         if (!$order) {
             return response()->json([
                 'success' => false,
-                'message' => 'Order not found or not authorized'
+                'message' => 'Order not found'
             ], 404);
         }
 
         $validator = Validator::make($request->all(), [
-            'status' => 'sometimes|in:pending,completed',
-            'total_price' => 'sometimes|numeric|min:0',
+            'status' => 'required|in:pending,completed',
         ]);
 
         if ($validator->fails()) {
@@ -121,18 +155,17 @@ class OrderController extends Controller
             ], 422);
         }
 
-        $order->update($request->only(['status', 'total_price']));
-        $order->load('user:id,name,email');
+        $order->update(['status' => $request->status]);
 
         return response()->json([
             'success' => true,
             'data' => $order,
-            'message' => 'Order updated successfully'
+            'message' => 'Order status updated successfully'
         ]);
     }
 
     /**
-     * Remove the specified order
+     * Delete order (hanya jika status pending)
      */
     public function destroy(string $id): JsonResponse
     {
@@ -143,31 +176,23 @@ class OrderController extends Controller
         if (!$order) {
             return response()->json([
                 'success' => false,
-                'message' => 'Order not found or not authorized'
+                'message' => 'Order not found'
             ], 404);
         }
 
-        $order->delete();
+        // Hanya bisa cancel jika status pending
+        if ($order->status !== 'pending') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot cancel order. Only pending orders can be cancelled.'
+            ], 400);
+        }
+
+        $order->delete(); // Akan otomatis hapus order_items karena cascade
 
         return response()->json([
             'success' => true,
-            'message' => 'Order deleted successfully'
-        ]);
-    }
-
-    /**
-     * Get all orders (admin only - optional)
-     */
-    public function getAllOrders(): JsonResponse
-    {
-        $orders = Order::with('user:id,name,email')
-            ->orderBy('created_at', 'desc')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => $orders,
-            'message' => 'All orders retrieved successfully'
+            'message' => 'Order cancelled successfully'
         ]);
     }
 }
