@@ -21,35 +21,39 @@ class PaymentService
     }
 
     public function createTransaction(Order $order)
-    {
-        $params = [
-            'transaction_details' => [
-                'order_id' => $order->id,
-                'gross_amount' => $order->total_price,
-            ],
-            'customer_details' => [
-                'first_name' => $order->user->name,
-                'email' => $order->user->email,
-            ],
-            'item_details' => $this->getItemDetails($order),
-        ];
+{
+    // ✅ BUAT ORDER ID UNIQUE
+    $uniqueOrderId = $order->id . '-' . time(); // Contoh: "1-1728159600"
+    
+    $params = [
+        'transaction_details' => [
+            'order_id' => $uniqueOrderId,  // ✅ Pakai unique ID
+            'gross_amount' => $order->total_price,
+        ],
+        'customer_details' => [
+            'first_name' => $order->user->name,
+            'email' => $order->user->email,
+        ],
+        'item_details' => $this->getItemDetails($order),
+    ];
 
-        try {
-            // Get Snap Token
-            $snapToken = Snap::getSnapToken($params);
-            
-            // Update order with snap token and total amount
-            $order->update([
-                'snap_token' => $snapToken,
-                'total_amount' => $order->total_price,
-                'payment_status' => 'unpaid'
-            ]);
+    try {
+        $snapToken = Snap::getSnapToken($params);
+        
+        // Update order dengan snap token dan unique order id
+        $order->update([
+            'snap_token' => $snapToken,
+            'total_amount' => $order->total_price,
+            'payment_status' => 'unpaid',
+            'transaction_id' => $uniqueOrderId // ✅ Simpan unique ID
+        ]);
 
-            return $snapToken;
-        } catch (\Exception $e) {
-            throw new \Exception('Failed to create payment: ' . $e->getMessage());
-        }
+        return $snapToken;
+    } catch (\Exception $e) {
+        throw new \Exception('Failed to create payment: ' . $e->getMessage());
     }
+}
+
 
     private function getItemDetails(Order $order)
     {
