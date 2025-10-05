@@ -6,14 +6,22 @@ use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
+use App\Services\PaymentService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
 class CheckoutController extends Controller
 {
+    protected $paymentService;
+
+    public function __construct(PaymentService $paymentService)
+    {
+        $this->paymentService = $paymentService;
+    }
+
     /**
-     * Process checkout - Create Order + Order Items
+     * Process checkout - Create Order + Order Items + Midtrans Payment
      */
     public function checkout(Request $request)
     {
@@ -40,6 +48,7 @@ class CheckoutController extends Controller
             $order = Order::create([
                 'user_id' => $user->id,
                 'status' => 'pending',
+                'payment_status' => 'unpaid', // ✅ Set payment status
             ]);
 
             $totalPrice = 0;
@@ -67,12 +76,15 @@ class CheckoutController extends Controller
                     'product_id' => $product->id,
                     'quantity' => $item['quantity'],
                     'unit_price' => $unitPrice,
-                    'subtotal' => $subtotal, // Atau auto-calculated di model
+                    'subtotal' => $subtotal,
                 ]);
 
                 // Update stock product
                 $product->decrement('stock', $item['quantity']);
             }
+
+            // 3. ✅ CREATE MIDTRANS PAYMENT
+            $snapToken = $this->paymentService->createTransaction($order);
 
             // ✅ Semua berhasil, commit transaction
             DB::commit();
@@ -87,6 +99,8 @@ class CheckoutController extends Controller
                         'id' => $order->id,
                         'user' => $order->user,
                         'status' => $order->status,
+                        'payment_status' => $order->payment_status, // ✅ Tambah payment status
+                        'snap_token' => $order->snap_token,         // ✅ Tambah snap token
                         'items' => $order->orderItems->map(function ($item) {
                             return [
                                 'id' => $item->id,
@@ -98,13 +112,19 @@ class CheckoutController extends Controller
                         }),
                         'created_at' => $order->created_at,
                     ],
+                    'payment' => [ // ✅ Tambah payment info
+                        'snap_token' => $snapToken,
+                        'payment_url' => config('midtrans.is_production') 
+                            ? "https://app.midtrans.com/snap/v2/vtweb/{$snapToken}"
+                            : "https://app.sandbox.midtrans.com/snap/v2/vtweb/{$snapToken}",
+                    ],
                     'summary' => [
-                        'total_price' => $order->total_price, // Dari accessor
+                        'total_price' => $order->total_price,
                         'total_items' => $order->orderItems->count(),
-                        'total_quantity' => $order->total_quantity, // Dari accessor
+                        'total_quantity' => $order->total_quantity,
                     ]
                 ],
-                'message' => 'Checkout successful! Order created.'
+                'message' => 'Checkout successful! Please proceed to payment.'
             ], 201);
 
         } catch (\Exception $e) {
@@ -181,7 +201,41 @@ class CheckoutController extends Controller
     }
 
     /**
-     * Complete payment (untuk simulasi payment berhasil)
+     * ✅ UPDATED: Get payment status
+     */
+    public function getPaymentStatus($orderId)
+    {
+        $user = auth('sanctum')->user();
+        
+        $order = Order::where('user_id', $user->id)->find($orderId);
+        
+        if (!$order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order not found'
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'order_id' => $order->id,
+                'status' => $order->status,
+                'payment_status' => $order->payment_status,
+                'payment_type' => $order->payment_type,
+                'transaction_id' => $order->transaction_id,
+                'total_amount' => $order->total_amount,
+                'snap_token' => $order->snap_token,
+                'is_paid' => $order->isPaid(),
+                'is_payment_pending' => $order->isPaymentPending(),
+                'is_payment_failed' => $order->isPaymentFailed(),
+            ],
+            'message' => 'Payment status retrieved successfully'
+        ]);
+    }
+
+    /**
+     * ✅ UPDATED: Complete payment (simulasi atau manual)
      */
     public function completePayment(Request $request, $orderId)
     {
@@ -196,15 +250,20 @@ class CheckoutController extends Controller
             ], 404);
         }
 
-        if ($order->status !== 'pending') {
+        if ($order->payment_status !== 'unpaid') {
             return response()->json([
                 'success' => false,
-                'message' => 'Order is not pending'
+                'message' => 'Order payment is not pending'
             ], 400);
         }
 
-        // Update status setelah payment berhasil
-        $order->update(['status' => 'completed']);
+        // ✅ Update payment status (simulasi manual)
+        $order->update([
+            'status' => 'completed',
+            'payment_status' => 'paid',
+            'payment_type' => $request->payment_type ?? 'manual', // Default manual
+            'transaction_id' => $request->transaction_id ?? 'manual-' . time(),
+        ]);
 
         $order->load(['orderItems.product', 'user']);
 
@@ -212,6 +271,47 @@ class CheckoutController extends Controller
             'success' => true,
             'data' => $order,
             'message' => 'Payment completed successfully'
+        ]);
+    }
+
+    /**
+     * ✅ NEW: Cancel unpaid order
+     */
+    public function cancelOrder($orderId)
+    {
+        $user = auth('sanctum')->user();
+        
+        $order = Order::where('user_id', $user->id)->find($orderId);
+        
+        if (!$order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order not found'
+            ], 404);
+        }
+
+        if ($order->payment_status === 'paid') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot cancel paid order'
+            ], 400);
+        }
+
+        // Restore stock
+        foreach ($order->orderItems as $item) {
+            $item->product->increment('stock', $item->quantity);
+        }
+
+        // Update order status
+        $order->update([
+            'status' => 'cancelled',
+            'payment_status' => 'failed'
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data' => $order,
+            'message' => 'Order cancelled successfully'
         ]);
     }
 }

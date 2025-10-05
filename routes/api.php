@@ -12,6 +12,8 @@ use App\Http\Controllers\Api\OrderItemController;
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 
+Route::post('/midtrans/webhook', [App\Http\Controllers\Api\WebhookController::class, 'midtransNotification']);
+
 // Protected routes
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', function (Request $request) {
